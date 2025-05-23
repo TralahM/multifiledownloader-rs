@@ -1,0 +1,46 @@
+[package]
+name = "multifiledownloader"
+description = "A multi-file downloader cli tool"
+authors = ["Tralah M Brian <https://github.com/tralahm>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/tralahm/multifiledownloader-rs"
+categories = ["cli", "downloader", "async", "concurrent", "tokio", "cli-tool"]
+repository = "https://github.com/tralahm/multifiledownloader-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+shadow-rs = "1.1.1"
+reqwest = { version = "0.12.15", features = [
+  "blocking",
+  "json",
+  "stream",
+  "gzip",
+  "zstd",
+] }
+headers = "0.4.0"
+futures = "0.3.31"
+bytes = { version = "1.10.1", features = ["serde"] }
+rayon = "1.10.0"
+url = "2.5.4"
+rand = "0.9"
+shellexpand = "3.1.1"
+humansize = "2.1.3"
+anyhow = "1.0.98"
+thiserror = "2.0.12"
+indicatif = { version = "0.17.11", features = ["rayon"] }
+tracing = { version = "0.1.41", features = ["attributes", "log"] }
+tracing-appender = "0.2.3"
+tracing-subscriber = { version = "0.3.19", features = [
+  "json",
+  "env-filter",
+  "registry",
+] }
+clap = { version = "4.5.38", features = ["derive", "env"] }
+clap_complete = "4.5.50"
+dotenvy = "0.15.7"
+
+[build-dependencies]
+shadow-rs = "1.1.1"
