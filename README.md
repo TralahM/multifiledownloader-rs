@@ -60,6 +60,9 @@ multifiledownloader -w=8 --dest=~/Downloads --urls=$(cat urls.txt|tr '\n' ','|se
 
 ```sh
 
+cargo install multifiledownloader
+
+# OR
 cargo install --git https://github.com/tralahm/multifiledownloader-rs
 ```
 
