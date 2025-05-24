@@ -1,6 +1,6 @@
 [package]
 name = "multifiledownloader"
-description = "A multi-file downloader cli tool"
+description = "A Concurrent and Configurable Multi-File downloader cli tool."
 authors = ["Tralah M Brian <https://github.com/tralahm>"]
 license = "MIT"
 readme = "README.md"
@@ -11,7 +11,7 @@ categories = [
   "web-programming::http-client",
 ]
 repository = "https://github.com/tralahm/multifiledownloader-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
