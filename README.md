@@ -38,6 +38,12 @@ multifiledownloader --completion elvish | tee $HOME/.elvish/completions/multifil
 
 ```
 
+### Read Url from a file one per line
+
+```sh
+multifiledownloader -w=8 --dest=~/Downloads --urls=$(cat urls.txt|tr '\n' ','|sed 's/,$//g')
+```
+
 ## Options
 
 | Option        | Description                                    | Default           |
