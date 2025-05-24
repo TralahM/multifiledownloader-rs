@@ -21,6 +21,7 @@ A simple tool to download multiple files from the command line concurrently.
 - Customizable destination directory
 - Show total downloaded size, per file, total time, eta, and average speed
 - Shell completion for bash, zsh, fish, powershell, and elvish
+- The destination directory is created if it does not exist automatically.
 
 ## Usage
 
