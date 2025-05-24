@@ -5,7 +5,11 @@ authors = ["Tralah M Brian <https://github.com/tralahm>"]
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/tralahm/multifiledownloader-rs"
-categories = ["cli", "downloader", "async", "concurrent", "tools"]
+categories = [
+  "command-line-utilities",
+  "filesystem",
+  "web-programming::http-client",
+]
 repository = "https://github.com/tralahm/multifiledownloader-rs"
 version = "0.1.0"
 edition = "2024"
