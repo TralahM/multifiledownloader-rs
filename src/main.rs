@@ -1,3 +1,9 @@
+mod cli;
+mod error;
+mod utils;
+
+shadow_rs::shadow!(build);
+
 use std::{
   collections::HashSet,
   fs::{self, File},
@@ -6,7 +12,6 @@ use std::{
   sync::Arc,
 };
 
-use anyhow::Result;
 use futures::StreamExt;
 use indicatif::{
   MultiProgress,
@@ -16,9 +21,10 @@ use indicatif::{
 };
 use reqwest::Client;
 use tokio::task;
+use tracing::info;
 use url::Url;
 
-shadow_rs::shadow!(build);
+use crate::{cli::Cli, error::Result};
 
 // Struct to hold downloader configuration and state
 #[derive(Clone)]
@@ -139,12 +145,10 @@ impl Downloader {
       .to_string()
   }
 
-  #[allow(dead_code)]
   pub fn num_workers(&self) -> usize {
     self.workers
   }
 
-  #[allow(dead_code)]
   /// Get the number of URLs
   pub fn num_urls(&self) -> usize {
     self.urls.len()
@@ -219,6 +223,7 @@ impl Downloader {
   }
 
   /// Get file size of the file at `url` from http HEAD request
+  #[tracing::instrument(skip(self), fields(url), err(level = tracing::Level::ERROR))]
   async fn get_file_size(&self, url: &str) -> Result<u64> {
     let resp = self.client.head(url).send().await?;
     // Retry on 429
@@ -230,7 +235,7 @@ impl Downloader {
     // Handle error
     match resp.error_for_status_ref() {
       Ok(_) => (),
-      Err(e) => return Err(anyhow::anyhow!(e)),
+      Err(e) => return Err(error::DownloadError::ReqwestError(e)),
     }
     // Get content length from response or response headers
     let content_len = resp
@@ -245,7 +250,6 @@ impl Downloader {
         self.seen_urls.lock().await.insert(url.to_string());
         *self.total_size.lock().await += content_len;
       }
-
       return Ok(content_len);
     }
     Ok(content_len)
@@ -258,6 +262,7 @@ impl Downloader {
   ///
   /// Skips file if it already exists
   /// Resumes download if file already exists and is partially downloaded
+  #[tracing::instrument(skip(self, mp, total_pb), fields(url), err(level = tracing::Level::ERROR))]
   pub async fn download_file(
     &self,
     url: String,
@@ -288,12 +293,12 @@ impl Downloader {
 
     // Get existing size for resume
     let start_byte = temp_filepath.metadata().map(|m| m.len()).unwrap_or(0);
-    let mut total_size = self.get_file_size(&url).await?;
+    let mut file_total_size = self.get_file_size(&url).await?;
     // Update total size message for total progress bar tracker
     total_pb.set_message(human_readable_size(*self.total_size.lock().await));
 
     // Setup progress bar
-    let pb = mp.add(ProgressBar::new(total_size));
+    let pb = mp.add(ProgressBar::new(file_total_size));
     pb.set_style(
       ProgressStyle::default_bar()
         .template(
@@ -304,20 +309,20 @@ impl Downloader {
     );
     pb.set_message(format!(
       "\x1b[93m{}\x1b[0m  {}",
-      human_readable_size(total_size),
+      human_readable_size(file_total_size),
       filename,
     ));
 
     // Check if Resume download done
     if start_byte > 0 {
       pb.set_position(start_byte);
-      if start_byte >= total_size {
+      if start_byte >= file_total_size {
         total_pb.inc(1); // Increment total progress for completed partials
         fs::rename(&temp_filepath, &filepath).unwrap_or(());
         pb.set_position(start_byte);
         pb.finish_with_message(format!(
           "\x1b[96mDone\x1b[0m \x1b[92m{}\x1b[0m  {} {}",
-          human_readable_size(total_size),
+          human_readable_size(file_total_size),
           filename,
           "✔",
         ));
@@ -357,18 +362,18 @@ impl Downloader {
     // Handle other http error
     match resp.error_for_status_ref() {
       Ok(_) => (),
-      Err(e) => return Err(anyhow::anyhow!(e)),
+      Err(e) => return Err(error::DownloadError::ReqwestError(e)),
     }
 
     // Update total size if not already determined from HEAD
-    if total_size == 0 && resp.status().is_success() {
-      total_size = resp
+    if file_total_size == 0 && resp.status().is_success() {
+      file_total_size = resp
         .headers()
         .get("content-length")
         .and_then(|v| v.to_str().ok().and_then(|s| s.parse::<u64>().ok()))
         .unwrap_or(0);
       self.seen_urls.lock().await.insert(url);
-      *self.total_size.lock().await += total_size;
+      *self.total_size.lock().await += file_total_size;
       total_pb.set_message(human_readable_size(*self.total_size.lock().await));
     }
 
@@ -389,7 +394,7 @@ impl Downloader {
     fs::rename(&temp_filepath, &filepath)?;
     pb.finish_with_message(format!(
       "\x1b[32mOk\x1b[0m \x1b[32m{}\x1b[0m  {} {}",
-      human_readable_size(total_size),
+      human_readable_size(file_total_size),
       filename,
       "✔",
     ));
@@ -447,7 +452,15 @@ impl Downloader {
         let downloader = downloader.clone();
         async move {
           let _permit = semaphore.acquire().await.unwrap();
-          downloader.download_file(url, mp, total_pb).await
+          downloader.download_file(url.clone(), mp, total_pb).await.inspect_err(
+            |e| {
+              tracing::error!(
+                "Error downloading file from: {} error: {:?}",
+                url,
+                e
+              )
+            },
+          )
         }
       })
       .collect::<task::JoinSet<_>>();
@@ -455,7 +468,7 @@ impl Downloader {
     // Wait for all downloads
     let results = tasks.join_all().await;
     for res in results {
-      res?;
+      if res.is_ok() {};
     }
 
     // Finish total progress bar
@@ -472,174 +485,42 @@ pub fn human_readable_size(bytes: u64) -> String {
   format_size(bytes, DECIMAL)
 }
 
+/// Main entry point
 #[tokio::main]
 async fn main() -> Result<()> {
-  utils::init_tracing();
-  let downloader = parse_args();
-  let c = downloader.clone();
-  downloader.run().await?;
-  tracing::info!("Download completed successfully");
-  eprintln!("{:?}", c);
-  eprintln!(
-    "Downloaded {} files of size {} to {}",
-    c.num_urls(),
-    c.get_total_size_human().await,
-    c.get_dest().display()
-  );
-  Ok(())
-}
-
-/// CLI parsing
-fn parse_args() -> Downloader {
   use clap::{CommandFactory, Parser};
-  let cli = Cli::parse();
-  let urls = cli.get_urls();
+  utils::init_tracing();
+  info!("Multi File Downloader v{}", build::PKG_VERSION);
 
-  if let Some(shell) = &cli.completion {
-    generate_completions("multifiledownloader", shell, &mut Cli::command());
-    std::process::exit(0);
+  let mut cmd = Cli::command();
+  let cli = Cli::parse();
+
+  if let Some(shell) = cli.completion {
+    cli::generate_completions("multifiledownloader", shell.as_ref(), &mut cmd);
+    return Ok(());
   }
 
-  if urls.is_empty() {
+  if cli.get_urls().is_empty() {
     eprintln!("Error: No URLs provided");
     std::process::exit(1);
   }
 
-  Downloader::new(urls, cli.get_dest(), cli.get_workers(), cli.get_clean())
-}
+  let downloader = Downloader::new(
+    cli.get_urls(),
+    cli.get_dest(),
+    cli.get_workers(),
+    cli.get_clean(),
+  );
+  let c = downloader.clone();
 
-use clap::Parser;
-
-#[derive(Parser, Debug, Clone)]
-#[command(
-  author,
-  version=build::CLAP_LONG_VERSION,
-  about="Concurrent multi-file downloader",
-  long_about = None,
-)]
-struct Cli {
-  #[arg(
-    short,
-    long,
-    help = "Comma-separated list of URLs to download",
-    required_unless_present = "completion",
-    default_value = ""
-  )]
-  urls: String,
-
-  #[arg(short, long, default_value = ".", help = "Destination folder")]
-  pub dest: String,
-
-  #[arg(
-    short,
-    long,
-    default_value_t = 8,
-    help = "Number of concurrent workers"
-  )]
-  workers: usize,
-
-  #[arg(
-    short,
-    long,
-    default_value_t = false,
-    help = "Clean destination folder if it exists"
-  )]
-  pub clean: bool,
-
-  #[arg(
-    long,
-    alias = "compl",
-    alias = "generate-completions",
-    help = "Shell to generate completion script for. One of bash,  zsh, fish, \
-            powershell, elvish"
-  )]
-  pub completion: Option<String>,
-}
-
-impl Cli {
-  pub fn get_urls(&self) -> Vec<String> {
-    self
-      .urls
-      .split(',')
-      .map(|s| s.trim().to_string())
-      .filter(|s| !s.is_empty())
-      .filter_map(|url| Url::parse(&url).ok().map(|u| u.to_string()))
-      .collect()
-  }
-
-  pub fn get_dest(&self) -> String {
-    shellexpand::tilde(&self.dest).to_string()
-  }
-
-  pub fn get_workers(&self) -> usize {
-    self.workers
-  }
-
-  pub fn get_clean(&self) -> bool {
-    self.clean
-  }
-}
-
-use clap_complete::{generate, shells};
-
-/// Generate shell completions for the CLI
-pub fn generate_completions<S: AsRef<str>>(
-  bin_name: S,
-  shell: S,
-  cmd: &mut clap::Command,
-) {
-  match shell.as_ref().to_lowercase().as_str() {
-    "bash" => {
-      generate(shells::Bash, cmd, bin_name.as_ref(), &mut std::io::stdout())
-    },
-    "zsh" => {
-      generate(shells::Zsh, cmd, bin_name.as_ref(), &mut std::io::stdout())
-    },
-    "fish" => {
-      generate(shells::Fish, cmd, bin_name.as_ref(), &mut std::io::stdout())
-    },
-    "powershell" => generate(
-      shells::PowerShell,
-      cmd,
-      bin_name.as_ref(),
-      &mut std::io::stdout(),
-    ),
-    "elvish" => {
-      generate(shells::Elvish, cmd, bin_name.as_ref(), &mut std::io::stdout())
-    },
-    _ => println!("Unsupported shell {}", shell.as_ref()),
-  }
-}
-
-mod utils {
-  use dotenvy::dotenv;
-  use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
-  pub fn init_tracing() {
-    use std::io::IsTerminal;
-    dotenv().ok();
-    let pkg_name = env!("CARGO_PKG_NAME");
-    let format = tracing_subscriber::fmt::format()
-      .with_level(true)
-      .with_thread_names(true)
-      .with_thread_ids(false)
-      .with_target(false)
-      .with_file(false)
-      .with_line_number(false)
-      .compact();
-    let stderr_subscriber = Registry::default()
-      .with(
-        EnvFilter::from_default_env()
-          .add_directive(tracing::Level::INFO.into())
-          .add_directive(format!("{}=debug", pkg_name).parse().unwrap())
-          .add_directive("multifiledownloader=debug".parse().unwrap()),
-      )
-      .with(
-        tracing_subscriber::fmt::layer()
-          .with_ansi(std::io::stderr().is_terminal())
-          .with_writer(std::io::stderr)
-          .event_format(format.clone()),
-      );
-
-    tracing::subscriber::set_global_default(stderr_subscriber).unwrap();
-  }
+  downloader.run().await?;
+  info!("Download completed successfully");
+  info!(
+    "Downloaded {} files of size {} to {} using {} workers",
+    c.num_urls(),
+    c.get_total_size_human().await,
+    c.get_dest().display(),
+    c.num_workers(),
+  );
+  Ok(())
 }
