@@ -1,6 +1,5 @@
 # Multi File Downloader
 
-[![GitHub license](https://img.shields.io/github/license/TralahM/multifiledownloader-rs)](https://github.com/TralahM/multifiledownloader-rs/blob/master/LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/multifiledownloader)](https://crates.io/crates/multifiledownloader)
 [![CI](https://github.com/TralahM/multifiledownloader-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/TralahM/multifiledownloader-rs/actions/workflows/ci.yml)
 
